@@ -11,11 +11,14 @@ class SocketWriter:
     def __init__(self, conn):
         self.conn = conn
     def write(self, data):
-        # Send everything printed back to the CLI client
+        # Handle both string and bytes
         if data:
-            self.conn.sendall(data.encode())
+            if isinstance(data, bytes):
+                self.conn.sendall(data)
+            else:
+                self.conn.sendall(data.encode())
     def flush(self):
-        pass # Required for file-like objects
+        pass
 
 def start_daemon():
     if os.path.exists(SOCKET_PATH): os.remove(SOCKET_PATH)
@@ -25,30 +28,31 @@ def start_daemon():
     server.listen(5)
     
     print("Daemon: Hot and listening...")
-
     while True:
-        conn, _ = server.accept()
         try:
-            raw_data = conn.recv(4096).decode()
-            if not raw_data: continue
-            
-            args = json.loads(raw_data)
-            sys.argv = ["huge_cli.py"] + args
-
-            # REDIRECT OUTPUT HERE
-            old_stdout = sys.stdout
-            old_stderr = sys.stderr
-            sys.stdout = sys.stderr = SocketWriter(conn)
-
-            try:
-                huge_cli.main()
-            finally:
-                # Always restore the terminal output for the daemon
-                sys.stdout = old_stdout
-                sys.stderr = old_stderr
+            conn, _ = server.accept()
+            while True:  # Keep connection open for multiple commands
+                raw_data = conn.recv(4096).decode()
+                if not raw_data:
+                    break # Change from 'continue' to 'break' to handle client disconnections
                 
+                args = json.loads(raw_data)
+                sys.argv = ["huge_cli.py"] + args
+
+                old_stdout = sys.stdout
+                old_stderr = sys.stderr
+                sys.stdout = sys.stderr = SocketWriter(conn)
+
+                try:
+                    huge_cli.app(standalone_mode=False) # Change from 'huge_cli.main()' to prevent typer from exiting
+                except Exception as e:
+                    print(f"Command Error: {e}\n")
+                finally:
+                    sys.stdout = old_stdout
+                    sys.stderr = old_stderr
+                    conn.close()
         except Exception as e:
-            conn.sendall(f"Daemon Error: {e}\n".encode())
+            print(f"Daemon Error: {e}\n")
         finally:
             conn.close()
 
